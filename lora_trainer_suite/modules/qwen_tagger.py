@@ -1,59 +1,124 @@
 """
-Qwen2-VL Tagger Module
-Uses Qwen2-VL-8B (Abliterated) with BitsAndBytes quantization for uncensored image tagging
+Qwen Vision-Language Tagger Module
+Supports Qwen2-VL and Qwen3-VL with dual backends:
+- Direct mode: HuggingFace Transformers with BitsAndBytes quantization
+- vLLM mode: High-performance inference server (3-5x faster)
 Optimized for RTX 3090
 """
 
 import os
 import torch
 from PIL import Image
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Dict, Any
 import gc
-from transformers import (
-    Qwen2VLForConditionalGeneration,
-    AutoProcessor,
-    BitsAndBytesConfig
-)
+import base64
+from io import BytesIO
+import requests
 
 
 class QwenVLTagger:
     """
-    Qwen2-VL-8B Vision-Language Model for image tagging
-    Uses BitsAndBytes 4-bit quantization for efficient VRAM usage on RTX 3090
+    Qwen Vision-Language Model for image tagging
+    Supports Qwen2-VL and Qwen3-VL with dual backends:
+    - Direct: Transformers + BitsAndBytes (simple, works offline)
+    - vLLM: High-performance server (3-5x faster, better batching)
     """
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen2-VL-7B-Instruct",
+        model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
         abliterated_repo: Optional[str] = None,
         device: Optional[str] = None,
+        backend: str = "auto",
         use_4bit: bool = True,
-        use_flash_attention: bool = True
+        use_flash_attention: bool = True,
+        vllm_server_url: Optional[str] = None,
+        vllm_port: int = 8000
     ):
         """
-        Initialize Qwen2-VL tagger
+        Initialize Qwen VL tagger with flexible backend
 
         Args:
-            model_name: HuggingFace model name
-            abliterated_repo: Optional abliterated model repo (e.g., community versions)
+            model_name: HuggingFace model name (Qwen2-VL or Qwen3-VL)
+            abliterated_repo: Optional abliterated model repo
             device: Device to use ('cuda' or 'cpu')
-            use_4bit: Use 4-bit BitsAndBytes quantization
-            use_flash_attention: Use Flash Attention 2 for faster inference
+            backend: Backend mode - 'auto', 'vllm', 'direct'
+                    - auto: Try vLLM first, fallback to direct
+                    - vllm: Use vLLM server (faster)
+                    - direct: Use Transformers (simpler)
+            use_4bit: Use 4-bit quantization (direct mode only)
+            use_flash_attention: Use Flash Attention 2
+            vllm_server_url: vLLM server URL (default: http://localhost)
+            vllm_port: vLLM server port (default: 8000)
         """
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.model_name = abliterated_repo or model_name
         self.use_4bit = use_4bit
         self.use_flash_attention = use_flash_attention
+        self.vllm_server_url = vllm_server_url or "http://localhost"
+        self.vllm_port = vllm_port
 
+        # Backend selection
+        self.backend = backend
+        self.active_backend = None
+
+        # Model/processor for direct mode
         self.model = None
         self.processor = None
 
-        self._load_model()
+        # Initialize backend
+        self._initialize_backend()
 
-    def _load_model(self):
-        """Load Qwen2-VL model with optimizations"""
+    def _initialize_backend(self):
+        """Initialize the appropriate backend based on configuration"""
+        if self.backend == "vllm":
+            # Force vLLM mode
+            if self._check_vllm_available():
+                self.active_backend = "vllm"
+                print(f"✓ Using vLLM backend at {self.vllm_server_url}:{self.vllm_port}")
+            else:
+                raise RuntimeError(
+                    f"vLLM server not available at {self.vllm_server_url}:{self.vllm_port}. "
+                    "Start server or use backend='direct'"
+                )
+
+        elif self.backend == "direct":
+            # Force direct mode
+            self.active_backend = "direct"
+            self._load_model_direct()
+
+        elif self.backend == "auto":
+            # Try vLLM first, fallback to direct
+            if self._check_vllm_available():
+                self.active_backend = "vllm"
+                print(f"✓ Using vLLM backend (auto-detected)")
+            else:
+                print("⚠ vLLM not available, falling back to direct mode")
+                self.active_backend = "direct"
+                self._load_model_direct()
+
+        else:
+            raise ValueError(f"Unknown backend: {self.backend}. Use 'auto', 'vllm', or 'direct'")
+
+    def _check_vllm_available(self) -> bool:
+        """Check if vLLM server is available"""
         try:
-            print(f"Loading Qwen2-VL from {self.model_name}...")
+            url = f"{self.vllm_server_url}:{self.vllm_port}/health"
+            response = requests.get(url, timeout=2)
+            return response.status_code == 200
+        except:
+            return False
+
+    def _load_model_direct(self):
+        """Load Qwen VL model with optimizations (supports Qwen2-VL and Qwen3-VL)"""
+        try:
+            from transformers import (
+                Qwen2VLForConditionalGeneration,
+                AutoProcessor,
+                BitsAndBytesConfig
+            )
+
+            print(f"Loading {self.model_name} in direct mode...")
 
             # Configure BitsAndBytes for 4-bit quantization
             if self.use_4bit and self.device == 'cuda':
@@ -68,17 +133,19 @@ class QwenVLTagger:
                 bnb_config = None
 
             # Load processor
+            # Note: Qwen2.5-VL and Qwen3-VL use same processor class as Qwen2-VL
             self.processor = AutoProcessor.from_pretrained(
                 self.model_name,
                 trust_remote_code=True,
-                cache_dir="./models/qwen2vl"
+                cache_dir="./models/qwenvl"
             )
 
             # Load model
+            # Note: Qwen2.5-VL and Qwen3-VL still use Qwen2VLForConditionalGeneration
             model_kwargs = {
                 "trust_remote_code": True,
                 "device_map": "auto",
-                "cache_dir": "./models/qwen2vl",
+                "cache_dir": "./models/qwenvl",
                 "torch_dtype": torch.bfloat16 if self.device == 'cuda' else torch.float32,
             }
 
@@ -97,7 +164,7 @@ class QwenVLTagger:
                 **model_kwargs
             )
 
-            print(f"✓ Qwen2-VL loaded on {self.device}")
+            print(f"✓ Model loaded on {self.device} (direct mode)")
 
             # Print VRAM usage
             if self.device == 'cuda':
@@ -122,7 +189,7 @@ class QwenVLTagger:
         do_sample: bool = True
     ) -> str:
         """
-        Generate tags/description for an image
+        Generate tags/description for an image (backend-agnostic)
 
         Args:
             image: Path to image or PIL Image
@@ -135,6 +202,25 @@ class QwenVLTagger:
         Returns:
             Generated tags/description
         """
+        if self.active_backend == "vllm":
+            return self._tag_image_vllm(
+                image, prompt, max_new_tokens, temperature, top_p, do_sample
+            )
+        else:
+            return self._tag_image_direct(
+                image, prompt, max_new_tokens, temperature, top_p, do_sample
+            )
+
+    def _tag_image_direct(
+        self,
+        image: Union[str, Image.Image],
+        prompt: Optional[str],
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        do_sample: bool
+    ) -> str:
+        """Generate tags using direct Transformers backend"""
         try:
             # Load image if path provided
             if isinstance(image, str):
@@ -215,7 +301,86 @@ class QwenVLTagger:
             return generated_text
 
         except Exception as e:
-            print(f"Error tagging image: {str(e)}")
+            print(f"Error tagging image (direct): {str(e)}")
+            return ""
+
+    def _tag_image_vllm(
+        self,
+        image: Union[str, Image.Image],
+        prompt: Optional[str],
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        do_sample: bool
+    ) -> str:
+        """Generate tags using vLLM backend"""
+        try:
+            # Load image if path provided
+            if isinstance(image, str):
+                if not os.path.exists(image):
+                    raise FileNotFoundError(f"Image not found: {image}")
+                image = Image.open(image).convert('RGB')
+
+            # Ensure RGB
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+
+            # Default tagging prompt
+            if prompt is None:
+                prompt = (
+                    "Describe this image in detail. Include:\n"
+                    "1. Main subject and their attributes\n"
+                    "2. Clothing, pose, and expression\n"
+                    "3. Background and setting\n"
+                    "4. Artistic style and composition\n"
+                    "5. Lighting and mood\n"
+                    "6. Any notable details\n"
+                    "Provide tags as comma-separated keywords."
+                )
+
+            # Convert image to base64
+            buffered = BytesIO()
+            image.save(buffered, format="PNG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode()
+
+            # Prepare vLLM request
+            url = f"{self.vllm_server_url}:{self.vllm_port}/v1/chat/completions"
+
+            payload = {
+                "model": self.model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{img_base64}"
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                "max_tokens": max_new_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+            }
+
+            # Send request to vLLM
+            response = requests.post(url, json=payload, timeout=30)
+            response.raise_for_status()
+
+            result = response.json()
+            generated_text = result["choices"][0]["message"]["content"]
+
+            return generated_text.strip()
+
+        except Exception as e:
+            print(f"Error tagging image (vLLM): {str(e)}")
             return ""
 
     def batch_tag(
@@ -325,19 +490,29 @@ class QwenVLTagger:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Qwen2-VL Tagger CLI")
+    parser = argparse.ArgumentParser(description="Qwen VL Tagger CLI (Qwen2-VL/Qwen3-VL)")
     parser.add_argument("image", help="Path to image")
     parser.add_argument("--prompt", help="Custom prompt", default=None)
     parser.add_argument("--style", action="store_true", help="Analyze style")
     parser.add_argument("--booru", action="store_true", help="Generate booru tags")
-    parser.add_argument("--no-4bit", action="store_true", help="Disable 4-bit quantization")
+    parser.add_argument("--backend", default="auto", choices=["auto", "vllm", "direct"],
+                        help="Backend: auto (try vLLM, fallback to direct), vllm, or direct")
+    parser.add_argument("--model", default="Qwen/Qwen2.5-VL-7B-Instruct",
+                        help="Model name (Qwen2-VL or Qwen3-VL)")
+    parser.add_argument("--no-4bit", action="store_true", help="Disable 4-bit quantization (direct mode)")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
+    parser.add_argument("--vllm-url", default="http://localhost", help="vLLM server URL")
+    parser.add_argument("--vllm-port", type=int, default=8000, help="vLLM server port")
 
     args = parser.parse_args()
 
     tagger = QwenVLTagger(
+        model_name=args.model,
         device=args.device,
-        use_4bit=not args.no_4bit
+        backend=args.backend,
+        use_4bit=not args.no_4bit,
+        vllm_server_url=args.vllm_url,
+        vllm_port=args.vllm_port
     )
 
     print(f"\nProcessing: {args.image}\n")

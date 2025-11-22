@@ -114,17 +114,35 @@ The GUI will open at `http://localhost:7860`
 3. Images should be in supported formats: PNG, JPG, JPEG, WEBP
 4. Optionally resize/augment your dataset
 
-### 3. Auto-Tag Images
+### 3. (Optional) Start vLLM Server for Faster Tagging
+
+For 3-5x faster inference with Qwen models:
+
+```bash
+# Start vLLM server in a separate terminal
+python start_vllm_server.py
+
+# Or with custom model
+python start_vllm_server.py --model Qwen/Qwen2.5-VL-7B-Instruct
+```
+
+The GUI will automatically detect and use vLLM if running.
+
+### 4. Auto-Tag Images
 
 1. Go to **Auto Tagging** tab
 2. Select your dataset path
 3. Choose tagging methods:
    - **CLIP Interrogator**: Fast, good quality captions
-   - **Qwen2-VL-8B**: Detailed, uncensored descriptions
-4. Configure merge settings
-5. Click **Start Auto-Tagging**
+   - **Qwen VL (Qwen2.5/Qwen3)**: Detailed, uncensored descriptions
+4. Select backend:
+   - **auto**: Try vLLM first (faster), fallback to direct
+   - **vllm**: Force vLLM (requires server running)
+   - **direct**: Use Transformers (slower but simpler)
+5. Configure merge settings
+6. Click **Start Auto-Tagging**
 
-### 4. Train LoRA
+### 5. Train LoRA
 
 1. Go to **LoRA Training** tab
 2. Configure:
@@ -134,7 +152,7 @@ The GUI will open at `http://localhost:7860`
    - **Training Parameters**: Adjust as needed
 3. Click **Start Training**
 
-### 5. Validate Model
+### 6. Validate Model
 
 1. Go to **Validation** tab
 2. Load your trained LoRA
@@ -233,6 +251,85 @@ python modules/validator.py \
   --prompt "a photo of sks person" \
   --samples 4
 ```
+
+## vLLM High-Performance Backend
+
+### What is vLLM?
+
+vLLM is a high-performance inference server that provides:
+- **3-5x faster** inference compared to direct Transformers
+- Better GPU utilization with PagedAttention
+- Automatic batching for multiple requests
+- Lower memory footprint
+
+### Starting vLLM Server
+
+**Quick Start:**
+```bash
+python start_vllm_server.py
+```
+
+**Custom Configuration:**
+```bash
+# Use specific model
+python start_vllm_server.py --model Qwen/Qwen2.5-VL-7B-Instruct
+
+# Adjust GPU memory usage (0.0-1.0)
+python start_vllm_server.py --gpu-memory 0.7
+
+# Custom port
+python start_vllm_server.py --port 8001
+
+# Multi-GPU (if you have 2+ GPUs)
+python start_vllm_server.py --tensor-parallel 2
+```
+
+**Manual vLLM Command:**
+```bash
+vllm serve Qwen/Qwen2.5-VL-7B-Instruct \
+  --max-model-len 4096 \
+  --dtype bfloat16 \
+  --gpu-memory-utilization 0.8 \
+  --trust-remote-code
+```
+
+### Using vLLM in Code
+
+```python
+from modules.qwen_tagger import QwenVLTagger
+
+# Auto mode: tries vLLM first, falls back to direct
+tagger = QwenVLTagger(backend="auto")
+
+# Force vLLM (fails if server not running)
+tagger = QwenVLTagger(backend="vllm")
+
+# Force direct mode (slower but simpler)
+tagger = QwenVLTagger(backend="direct", use_4bit=True)
+
+# Custom vLLM server
+tagger = QwenVLTagger(
+    backend="vllm",
+    vllm_server_url="http://192.168.1.100",
+    vllm_port=8000
+)
+```
+
+### vLLM vs Direct Mode
+
+| Feature | vLLM | Direct |
+|---------|------|--------|
+| **Speed** | 3-5x faster | Baseline |
+| **Memory** | Lower (PagedAttention) | Higher |
+| **Batching** | Automatic | Manual |
+| **Setup** | Requires server | Just install packages |
+| **4-bit Quant** | No | Yes |
+| **Offline** | No (needs server) | Yes |
+
+**Recommendation:**
+- **Large datasets**: Use vLLM for batch tagging
+- **Quick tests**: Use direct mode
+- **Limited VRAM**: Direct mode with 4-bit quantization
 
 ## Advanced Features
 
@@ -354,11 +451,12 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 ## Performance Tips
 
-1. **Use NVMe SSD**: For dataset storage and cache
-2. **Enable Flash Attention**: 20-30% faster training
-3. **Use bf16**: Better numerical stability than fp16
-4. **Cache Latents**: Speeds up training (Kohya_ss)
-5. **Multiple Workers**: For data loading (adjust based on CPU)
+1. **Use vLLM for Tagging**: 3-5x faster than direct mode for batch operations
+2. **Use NVMe SSD**: For dataset storage and cache
+3. **Enable Flash Attention**: 20-30% faster training
+4. **Use bf16**: Better numerical stability than fp16
+5. **Cache Latents**: Speeds up training (Kohya_ss)
+6. **Multiple Workers**: For data loading (adjust based on CPU)
 
 ## File Structure
 
@@ -411,6 +509,14 @@ For issues and questions:
 - Documentation: [link]
 
 ## Changelog
+
+### v1.1.0 (2024-11-22)
+- **vLLM Backend Support**: 3-5x faster inference for Qwen models
+- **Qwen3-VL Support**: Updated to support Qwen2.5-VL and Qwen3-VL
+- **Dual Backend System**: Auto-detect vLLM or fallback to direct mode
+- **vLLM Server Launcher**: Easy-to-use script for starting vLLM
+- **Enhanced GUI**: Backend selection in settings and tagging tabs
+- **Updated Dependencies**: Latest transformers, vLLM, and accelerate
 
 ### v1.0.0 (2024-01-XX)
 - Initial release
