@@ -211,10 +211,11 @@ class LoRATrainerGUI:
                     choices=[
                         "black-forest-labs/FLUX.1-dev",
                         "black-forest-labs/FLUX.1-schnell",
-                        "stabilityai/stable-diffusion-2-1",
-                        "stabilityai/stable-diffusion-2-1-base",
+                        "wandai/wan-2.1-14b",
+                        "wandai/wan-2.2-14b",
                     ],
-                    value="black-forest-labs/FLUX.1-dev"
+                    value="black-forest-labs/FLUX.1-dev",
+                    info="Flux for images, WAN for video generation"
                 )
 
                 output_name = gr.Textbox(
@@ -320,7 +321,8 @@ class LoRATrainerGUI:
                     choices=[
                         "black-forest-labs/FLUX.1-dev",
                         "black-forest-labs/FLUX.1-schnell",
-                        "stabilityai/stable-diffusion-2-1",
+                        "wandai/wan-2.1-14b",
+                        "wandai/wan-2.2-14b",
                     ],
                     value="black-forest-labs/FLUX.1-dev"
                 )
@@ -427,7 +429,7 @@ class LoRATrainerGUI:
                     - CLIP Interrogator for automated captioning
                     - Qwen2-VL / Qwen2.5-VL / Qwen3-VL (uncensored tagging)
                     - **Dual Backend:** vLLM (3-5x faster) + Direct mode
-                    - Support for Flux and SD 2.1/2.2
+                    - Support for Flux (images) and WAN 2.1/2.2-14b (video)
                     - Integrated validation pipeline
 
                     Hardware Requirements:

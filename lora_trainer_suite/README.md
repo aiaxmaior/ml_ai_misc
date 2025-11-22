@@ -6,7 +6,7 @@ A comprehensive GUI-based LoRA training suite for Flux and Stable Diffusion mode
 
 - 🎨 **Modern Web GUI** - Built with Gradio for easy access
 - 🏷️ **Automated Tagging** - CLIP Interrogator + Qwen2-VL-8B (abliterated)
-- 🚀 **Multi-Model Support** - Flux.1, Stable Diffusion 2.1/2.2
+- 🚀 **Multi-Model Support** - Flux.1 (images), WAN 2.1/2.2-14b (video)
 - ⚡ **Optimized Performance** - Designed for RTX 3090 with 24GB VRAM
 - 📊 **Real-time Monitoring** - Training progress, loss curves, sample generation
 - ✅ **Built-in Validation** - Quality metrics and comparison tools
@@ -175,13 +175,14 @@ Mixed Precision: bf16
 Gradient Checkpointing: True
 ```
 
-**Stable Diffusion 2.1:**
+**WAN Video Diffusion 2.1/2.2-14b:**
 ```
-Batch Size: 1-2
-Gradient Accumulation: 2-4
+Batch Size: 1
+Gradient Accumulation: 4-8
 Learning Rate: 1e-4 to 5e-5
-LoRA Rank: 8-16
-Mixed Precision: fp16 or bf16
+LoRA Rank: 16-32
+Mixed Precision: bf16
+Resolution: 512x512 (video frames)
 ```
 
 ### Memory Optimization
@@ -384,13 +385,13 @@ results = tagger.batch_tag(
    - Rank: 16-32
    - Learning Rate: 1e-4
 
-### Workflow 2: Style LoRA (SD 2.1)
+### Workflow 2: Style LoRA (WAN Video)
 
-1. Collect 30-100 images in target style
-2. Tag focusing on style elements
+1. Collect 30-100 video frames/keyframes in target style
+2. Tag focusing on motion, style, and composition
 3. Train with:
    - Steps: 1500-3000
-   - Rank: 8-16
+   - Rank: 16-32
    - Learning Rate: 5e-5
 
 ### Workflow 3: Concept LoRA
@@ -522,7 +523,7 @@ For issues and questions:
 - Initial release
 - CLIP Interrogator integration
 - Qwen2-VL tagging support
-- Flux and SD 2.1/2.2 training
+- Flux and WAN video diffusion training support
 - Real-time validation
 - Web-based GUI
 
