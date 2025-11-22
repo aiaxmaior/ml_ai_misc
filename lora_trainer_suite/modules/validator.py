@@ -35,10 +35,12 @@ class ModelValidator:
         num_samples: int = 4,
         steps: int = 30,
         guidance_scale: float = 7.5,
-        seed: int = -1
+        seed: int = -1,
+        num_frames: int = 16,  # For video models
+        fps: int = 8  # For video models
     ) -> Tuple[List[str], Dict]:
         """
-        Validate LoRA model by generating samples
+        Validate LoRA model by generating samples (images or videos)
 
         Args:
             lora_path: Path to LoRA weights
@@ -49,11 +51,16 @@ class ModelValidator:
             steps: Inference steps
             guidance_scale: Guidance scale
             seed: Random seed (-1 for random)
+            num_frames: Number of frames for video models
+            fps: Frames per second for video models
 
         Returns:
-            Tuple of (image_paths, metrics)
+            Tuple of (file_paths, metrics)
         """
         try:
+            # Determine if this is a video model
+            is_video = 'wan' in base_model.lower()
+
             # Load pipeline if needed
             if self.pipeline is None or self.current_model != base_model:
                 self._load_pipeline(base_model)
@@ -61,30 +68,70 @@ class ModelValidator:
             # Load LoRA weights
             self._load_lora(lora_path)
 
-            # Generate samples
-            images = self._generate_samples(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                num_samples=num_samples,
-                steps=steps,
-                guidance_scale=guidance_scale,
-                seed=seed
-            )
-
-            # Save images
+            # Setup output directory
             output_dir = Path(lora_path).parent / "validation_samples"
             output_dir.mkdir(exist_ok=True, parents=True)
 
-            image_paths = []
-            for idx, img in enumerate(images):
-                img_path = output_dir / f"sample_{idx:04d}.png"
-                img.save(img_path)
-                image_paths.append(str(img_path))
+            file_paths = []
+            samples = []
+
+            if is_video:
+                # Generate video samples
+                videos = self._generate_video_samples(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    num_samples=num_samples,
+                    steps=steps,
+                    guidance_scale=guidance_scale,
+                    seed=seed,
+                    num_frames=num_frames,
+                    fps=fps
+                )
+
+                # Save videos and extract preview frames
+                for idx, video_frames in enumerate(videos):
+                    # Save as GIF
+                    gif_path = output_dir / f"video_{idx:04d}.gif"
+                    video_frames[0].save(
+                        gif_path,
+                        save_all=True,
+                        append_images=video_frames[1:],
+                        duration=1000 // fps,
+                        loop=0
+                    )
+                    file_paths.append(str(gif_path))
+
+                    # Also save first frame as preview
+                    preview_path = output_dir / f"video_{idx:04d}_frame0.png"
+                    video_frames[0].save(preview_path)
+                    samples.append(video_frames[0])
+
+            else:
+                # Generate image samples
+                images = self._generate_samples(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    num_samples=num_samples,
+                    steps=steps,
+                    guidance_scale=guidance_scale,
+                    seed=seed
+                )
+
+                # Save images
+                for idx, img in enumerate(images):
+                    img_path = output_dir / f"sample_{idx:04d}.png"
+                    img.save(img_path)
+                    file_paths.append(str(img_path))
+                    samples.append(img)
 
             # Compute quality metrics
-            metrics = self._compute_metrics(images, prompt)
+            metrics = self._compute_metrics(samples, prompt)
+            metrics['is_video'] = is_video
+            if is_video:
+                metrics['num_frames'] = num_frames
+                metrics['fps'] = fps
 
-            return image_paths, metrics
+            return file_paths, metrics
 
         except Exception as e:
             return [], {"error": str(e)}
@@ -96,6 +143,8 @@ class ModelValidator:
 
             if 'flux' in base_model.lower():
                 self._load_flux_pipeline(base_model)
+            elif 'wan' in base_model.lower():
+                self._load_wan_pipeline(base_model)
             elif 'stable-diffusion' in base_model.lower():
                 self._load_sd_pipeline(base_model)
             else:
@@ -145,6 +194,40 @@ class ModelValidator:
             self.pipeline.enable_xformers_memory_efficient_attention()
         except:
             pass
+
+    def _load_wan_pipeline(self, model_name: str):
+        """Load WAN video diffusion pipeline"""
+        try:
+            # WAN uses similar pipeline structure to SD but for video
+            # Note: This assumes WAN models are compatible with diffusers
+            # May need adjustment based on actual WAN implementation
+            from diffusers import DiffusionPipeline
+
+            self.pipeline = DiffusionPipeline.from_pretrained(
+                model_name,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+                cache_dir="./models/wan",
+                trust_remote_code=True  # WAN may need custom code
+            )
+
+            # Enable optimizations
+            if hasattr(self.pipeline, 'enable_attention_slicing'):
+                self.pipeline.enable_attention_slicing()
+
+            if hasattr(self.pipeline, 'enable_vae_slicing'):
+                self.pipeline.enable_vae_slicing()
+
+            # Enable xformers if available
+            try:
+                self.pipeline.enable_xformers_memory_efficient_attention()
+            except:
+                pass
+
+            print("✓ WAN video pipeline loaded")
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to load WAN pipeline: {str(e)}")
 
     def _load_lora(self, lora_path: str):
         """Load LoRA weights into pipeline"""
@@ -201,6 +284,76 @@ class ModelValidator:
             images.append(result.images[0])
 
         return images
+
+    def _generate_video_samples(
+        self,
+        prompt: str,
+        negative_prompt: str,
+        num_samples: int,
+        steps: int,
+        guidance_scale: float,
+        seed: int,
+        num_frames: int = 16,
+        fps: int = 8
+    ) -> List[List[Image.Image]]:
+        """Generate video samples (list of frame lists)"""
+        videos = []
+
+        for i in range(num_samples):
+            # Set seed
+            if seed >= 0:
+                generator = torch.Generator(device="cuda").manual_seed(seed + i)
+            else:
+                generator = None
+
+            # Generate video
+            with torch.inference_mode():
+                result = self.pipeline(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    num_inference_steps=steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator,
+                    height=512,
+                    width=512,
+                    num_frames=num_frames,
+                )
+
+            # Extract frames
+            # WAN output format may vary - handle both video tensor and frame list
+            if hasattr(result, 'frames'):
+                frames = result.frames[0]  # First video in batch
+            elif hasattr(result, 'images'):
+                frames = result.images  # May be list of frames
+            else:
+                # Fallback: treat as video tensor
+                frames = result[0] if isinstance(result, list) else [result]
+
+            # Convert frames to PIL Images if needed
+            pil_frames = []
+            for frame in frames:
+                if isinstance(frame, Image.Image):
+                    pil_frames.append(frame)
+                elif isinstance(frame, torch.Tensor):
+                    # Convert tensor to PIL
+                    frame_array = frame.cpu().numpy()
+                    if frame_array.ndim == 3:
+                        # CHW to HWC
+                        frame_array = frame_array.transpose(1, 2, 0)
+                    # Normalize to 0-255
+                    if frame_array.max() <= 1.0:
+                        frame_array = (frame_array * 255).astype(np.uint8)
+                    pil_frames.append(Image.fromarray(frame_array.astype(np.uint8)))
+                else:
+                    # Assume numpy array
+                    frame_array = np.array(frame)
+                    if frame_array.max() <= 1.0:
+                        frame_array = (frame_array * 255).astype(np.uint8)
+                    pil_frames.append(Image.fromarray(frame_array.astype(np.uint8)))
+
+            videos.append(pil_frames)
+
+        return videos
 
     def _compute_metrics(self, images: List[Image.Image], prompt: str) -> Dict:
         """
