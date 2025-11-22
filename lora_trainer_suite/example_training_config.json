@@ -1,4 +1,5 @@
 {
+  "_comment": "Example config for Flux (images) - For WAN video: use wandai/wan-2.1-14b or wandai/wan-2.2-14b",
   "base_model": "black-forest-labs/FLUX.1-dev",
   "output_name": "my_character_lora",
   "output_dir": "./output/loras",
@@ -18,5 +19,5 @@
   "resolution": 512,
   "enable_xformers": true,
   "seed": 42,
-  "notes": "Character LoRA training with recommended settings for RTX 3090"
+  "notes": "Character LoRA training with recommended settings for RTX 3090. For video: switch base_model to wandai/wan-2.1-14b or wandai/wan-2.2-14b"
 }
