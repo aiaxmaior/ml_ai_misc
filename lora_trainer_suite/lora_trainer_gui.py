@@ -149,7 +149,15 @@ class LoRATrainerGUI:
                     value="best"
                 )
 
-                use_qwen = gr.Checkbox(label="Qwen2-VL-8B (Uncensored)", value=True)
+                use_qwen = gr.Checkbox(label="Qwen VL (Qwen2.5/Qwen3) - Uncensored", value=True)
+
+                qwen_backend = gr.Radio(
+                    label="Qwen Backend",
+                    choices=["auto", "vllm", "direct"],
+                    value="auto",
+                    info="auto: try vLLM first (3-5x faster), fallback to direct | vllm: force vLLM | direct: transformers only"
+                )
+
                 qwen_prompt = gr.Textbox(
                     label="Qwen Custom Prompt",
                     value="Describe this image in detail, including all visible elements, style, composition, and artistic qualities.",
@@ -185,7 +193,7 @@ class LoRATrainerGUI:
             fn=self.start_auto_tagging,
             inputs=[
                 tag_dataset_path, use_clip, clip_mode,
-                use_qwen, qwen_prompt, merge_tags, tag_format
+                use_qwen, qwen_backend, qwen_prompt, merge_tags, tag_format
             ],
             outputs=[tagging_progress, current_image, current_tags]
         )
@@ -384,6 +392,21 @@ class LoRATrainerGUI:
                     info="Ryzen 9 7900X has 12 cores"
                 )
 
+                gr.Markdown("### Qwen VL Backend Settings")
+
+                default_qwen_backend = gr.Radio(
+                    label="Default Qwen Backend",
+                    choices=["auto", "vllm", "direct"],
+                    value="auto",
+                    info="auto: try vLLM, fallback to direct"
+                )
+
+                vllm_server_url = gr.Textbox(
+                    label="vLLM Server URL",
+                    value="http://localhost:8000",
+                    info="URL of vLLM server (if using vLLM backend)"
+                )
+
                 gr.Markdown("### Model Cache")
 
                 cache_dir = gr.Textbox(
@@ -398,11 +421,12 @@ class LoRATrainerGUI:
 
                 gr.Markdown(
                     """
-                    **LoRA Trainer Suite v1.0**
+                    **LoRA Trainer Suite v1.1**
 
                     Features:
                     - CLIP Interrogator for automated captioning
-                    - Qwen2-VL-8B (Abliterated) for uncensored tagging
+                    - Qwen2-VL / Qwen2.5-VL / Qwen3-VL (uncensored tagging)
+                    - **Dual Backend:** vLLM (3-5x faster) + Direct mode
                     - Support for Flux and SD 2.1/2.2
                     - Integrated validation pipeline
 
@@ -416,6 +440,11 @@ class LoRATrainerGUI:
                     - Hugging Face Diffusers
                     - BitsAndBytes for quantization
                     - CLIP Interrogator
+                    - vLLM (optional, for faster inference)
+
+                    **vLLM Server:**
+                    Run `python start_vllm_server.py` to start
+                    the high-performance inference server.
                     """
                 )
 
@@ -425,7 +454,7 @@ class LoRATrainerGUI:
 
         save_settings_btn.click(
             fn=self.save_settings,
-            inputs=[device, vram_optimization, cpu_threads, cache_dir],
+            inputs=[device, vram_optimization, cpu_threads, default_qwen_backend, vllm_server_url, cache_dir],
             outputs=[settings_status]
         )
 
@@ -458,7 +487,7 @@ class LoRATrainerGUI:
 
     def start_auto_tagging(
         self, dataset_path: str, use_clip: bool, clip_mode: str,
-        use_qwen: bool, qwen_prompt: str, merge_tags: bool, tag_format: str
+        use_qwen: bool, qwen_backend: str, qwen_prompt: str, merge_tags: bool, tag_format: str
     ):
         """Start automated tagging process"""
         try:
@@ -468,8 +497,8 @@ class LoRATrainerGUI:
                 self.clip_interrogator = CLIPInterrogatorModule()
 
             if use_qwen and self.qwen_tagger is None:
-                yield "Loading Qwen2-VL-8B (this may take a moment)...", None, ""
-                self.qwen_tagger = QwenVLTagger()
+                yield f"Loading Qwen VL (backend: {qwen_backend})...\n", None, ""
+                self.qwen_tagger = QwenVLTagger(backend=qwen_backend)
 
             # Get all images
             images = self.dataset_manager.get_all_images(dataset_path)
@@ -562,13 +591,16 @@ class LoRATrainerGUI:
         except Exception as e:
             return [], {"error": str(e)}
 
-    def save_settings(self, device: str, vram_opt: str, cpu_threads: int, cache_dir: str) -> str:
+    def save_settings(self, device: str, vram_opt: str, cpu_threads: int,
+                     qwen_backend: str, vllm_url: str, cache_dir: str) -> str:
         """Save application settings"""
         try:
             self.config.update({
                 'device': device,
                 'vram_optimization': vram_opt,
                 'cpu_threads': int(cpu_threads),
+                'qwen_backend': qwen_backend,
+                'vllm_server_url': vllm_url,
                 'cache_dir': cache_dir
             })
             self.config.save()

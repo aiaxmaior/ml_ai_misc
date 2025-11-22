@@ -8,24 +8,29 @@ torchaudio>=2.1.0
 
 # Diffusion Models
 diffusers>=0.25.0
-transformers>=4.37.0
-accelerate>=0.25.0
-safetensors>=0.4.0
-peft>=0.8.0
+transformers>=4.40.0
+accelerate>=0.27.0
+safetensors>=0.4.1
+peft>=0.9.0
 
 # Quantization & Optimization
-bitsandbytes>=0.41.0
+bitsandbytes>=0.42.0
 flash-attn>=2.5.0
 xformers>=0.0.23
 triton>=2.1.0
+
+# vLLM for high-performance inference (optional but recommended)
+vllm>=0.3.0
 
 # CLIP Interrogator
 clip-interrogator>=0.6.0
 open_clip_torch>=2.23.0
 
-# Vision-Language Models (Qwen2-VL)
+# Vision-Language Models (Qwen2-VL / Qwen2.5-VL / Qwen3-VL)
+# Note: Qwen2.5-VL and Qwen3-VL use the same packages as Qwen2-VL
 qwen-vl-utils>=0.0.1
 einops>=0.7.0
+# For video support (optional): av>=10.0.0
 
 # Image Processing
 Pillow>=10.0.0
@@ -65,5 +70,26 @@ flake8>=6.1.0
 # tensorboard>=2.15.0
 # tensorboardX>=2.6.0
 
-# Note: For Qwen2-VL, you may need to install from source or specific repo:
-# pip install git+https://github.com/QwenLM/Qwen2-VL.git
+# ==============================================================================
+# Additional Installation Notes
+# ==============================================================================
+
+# Qwen Vision Models (Qwen2-VL / Qwen2.5-VL / Qwen3-VL):
+# - Latest models work with transformers>=4.40.0
+# - For abliterated (uncensored) versions, check community repos on HuggingFace
+# - Examples: mlabonne/Qwen2-VL-7B-Instruct-abliterated (if available)
+
+# vLLM Setup (for 3-5x faster inference):
+# 1. Install: pip install vllm>=0.3.0
+# 2. Start server:
+#    vllm serve Qwen/Qwen2.5-VL-7B-Instruct \
+#      --max-model-len 4096 \
+#      --dtype bfloat16 \
+#      --gpu-memory-utilization 0.8
+# 3. Server runs on http://localhost:8000 by default
+# 4. GUI will auto-detect and use vLLM if available
+
+# For best results with RTX 3090:
+# - Use vLLM for batch tagging operations (much faster)
+# - Use direct mode if vLLM server is not running
+# - 4-bit quantization works only in direct mode
