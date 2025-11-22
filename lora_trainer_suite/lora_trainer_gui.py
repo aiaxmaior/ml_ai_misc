@@ -347,23 +347,46 @@ class LoRATrainerGUI:
                     guidance_scale = gr.Number(label="Guidance Scale", value=7.5)
                     seed = gr.Number(label="Seed (-1 for random)", value=-1)
 
+                gr.Markdown("### Video Settings (for WAN models)")
+
+                with gr.Row():
+                    num_frames = gr.Number(
+                        label="Number of Frames",
+                        value=16,
+                        info="For video models only"
+                    )
+                    fps = gr.Number(
+                        label="FPS",
+                        value=8,
+                        info="Frames per second for video"
+                    )
+
                 generate_btn = gr.Button("Generate Samples", variant="primary")
 
             with gr.Column():
                 validation_images = gr.Gallery(
-                    label="Generated Images",
+                    label="Generated Samples (Images/Videos)",
                     columns=2,
-                    height=600
+                    height=600,
+                    type="filepath"
                 )
 
                 quality_metrics = gr.JSON(label="Quality Metrics")
+
+                gr.Markdown(
+                    """
+                    **Note:** Videos are saved as animated GIFs.
+                    Click on thumbnails to view full size/animation.
+                    """
+                )
 
         # Event handlers
         generate_btn.click(
             fn=self.validate_model,
             inputs=[
                 lora_model_path, val_base_model, validation_prompt,
-                negative_prompt, num_samples, steps, guidance_scale, seed
+                negative_prompt, num_samples, steps, guidance_scale, seed,
+                num_frames, fps
             ],
             outputs=[validation_images, quality_metrics]
         )
@@ -570,14 +593,14 @@ class LoRATrainerGUI:
     def validate_model(
         self, lora_path: str, base_model: str, prompt: str,
         negative_prompt: str, num_samples: int, steps: int,
-        guidance_scale: float, seed: int
+        guidance_scale: float, seed: int, num_frames: int, fps: int
     ):
-        """Validate trained LoRA model"""
+        """Validate trained LoRA model (images or videos)"""
         try:
             if self.validator is None:
                 self.validator = ModelValidator(self.config)
 
-            images, metrics = self.validator.validate(
+            files, metrics = self.validator.validate(
                 lora_path=lora_path,
                 base_model=base_model,
                 prompt=prompt,
@@ -585,10 +608,12 @@ class LoRATrainerGUI:
                 num_samples=int(num_samples),
                 steps=int(steps),
                 guidance_scale=guidance_scale,
-                seed=int(seed)
+                seed=int(seed),
+                num_frames=int(num_frames),
+                fps=int(fps)
             )
 
-            return images, metrics
+            return files, metrics
 
         except Exception as e:
             return [], {"error": str(e)}
