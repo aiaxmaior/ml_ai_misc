@@ -1,0 +1,22 @@
+{
+  "base_model": "black-forest-labs/FLUX.1-dev",
+  "output_name": "my_character_lora",
+  "output_dir": "./output/loras",
+  "dataset_path": "./datasets/my_character",
+  "batch_size": 1,
+  "gradient_accumulation_steps": 4,
+  "learning_rate": 0.0001,
+  "max_train_steps": 1000,
+  "lora_rank": 16,
+  "lora_alpha": 32,
+  "optimizer": "AdamW8bit",
+  "mixed_precision": "bf16",
+  "gradient_checkpointing": true,
+  "save_every_n_steps": 100,
+  "sample_every_n_steps": 100,
+  "sample_prompt": "a photo of sks person",
+  "resolution": 512,
+  "enable_xformers": true,
+  "seed": 42,
+  "notes": "Character LoRA training with recommended settings for RTX 3090"
+}
