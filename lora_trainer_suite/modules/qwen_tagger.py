@@ -5,7 +5,7 @@ Qwen VL tagger with vLLM and direct mode support
 import os
 import torch
 from PIL import Image
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Dict
 import gc
 import base64
 from io import BytesIO
@@ -69,7 +69,17 @@ class QwenVLTagger:
     def _check_vllm_available(self) -> bool:
         """Check if vLLM server is available"""
         try:
+            # Try vLLM specific health endpoint first
             url = f"{self.vllm_server_url}:{self.vllm_port}/health"
+            response = requests.get(url, timeout=2)
+            if response.status_code == 200:
+                return True
+        except:
+            pass
+
+        try:
+            # Fallback to OpenAI /v1/models endpoint (works for KoboldCPP, etc)
+            url = f"{self.vllm_server_url}:{self.vllm_port}/v1/models"
             response = requests.get(url, timeout=2)
             return response.status_code == 200
         except:
@@ -375,6 +385,144 @@ class QwenVLTagger:
         )
 
         return self.tag_image(image, prompt=prompt, temperature=0.5)
+
+    def suggest_crop(self, image: Union[str, Image.Image], target_size: int = 512) -> Dict:
+        """
+        Ask VLM to suggest a crop for the image
+        Returns: {'x': int, 'y': int, 'w': int, 'h': int} or None
+        """
+        prompt = (
+            f"Analyze this image for cropping to a square aspect ratio ({target_size}x{target_size}). "
+            "Identify the main subject and provide coordinates for a centered crop that captures the subject best. "
+            "Return ONLY a JSON object with keys 'x', 'y', 'w', 'h' representing the crop box. "
+            "Example: {\"x\": 100, \"y\": 50, \"w\": 512, \"h\": 512}"
+        )
+
+        try:
+            response = self.tag_image(image, prompt=prompt, temperature=0.1, max_new_tokens=128)
+            
+            # Extract JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group(0))
+            return None
+        except Exception as e:
+            print(f"Error getting crop suggestion: {e}")
+            return None
+
+    def tag_video(
+        self,
+        frames: List[Image.Image],
+        prompt: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        top_k: int = 50,
+        repetition_penalty: float = 1.1,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0
+    ) -> str:
+        """Tag video using multiple frames"""
+        if self.active_backend == "vllm":
+            return self._tag_video_vllm(
+                frames, prompt, max_new_tokens, temperature, top_p, top_k,
+                repetition_penalty, presence_penalty, frequency_penalty
+            )
+        else:
+            return self._tag_video_direct(
+                frames, prompt, max_new_tokens, temperature, top_p, top_k,
+                repetition_penalty, presence_penalty, frequency_penalty
+            )
+
+    def _tag_video_direct(self, frames, prompt, max_new_tokens, temperature, top_p, top_k, repetition_penalty, presence_penalty, frequency_penalty):
+        try:
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": frame} for frame in frames
+                    ] + [{"type": "text", "text": prompt}]
+                }
+            ]
+
+            text = self.processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+
+            inputs = self.processor(
+                text=[text],
+                images=frames,
+                return_tensors="pt",
+                padding=True
+            )
+
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+            with torch.inference_mode():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
+                    pad_token_id=self.processor.tokenizer.pad_token_id,
+                    eos_token_id=self.processor.tokenizer.eos_token_id,
+                )
+
+            generated_text = self.processor.batch_decode(
+                outputs,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
+            )[0]
+
+            if prompt in generated_text:
+                generated_text = generated_text.split(prompt)[-1].strip()
+
+            return generated_text
+        except Exception as e:
+            return f"Error processing video (direct): {str(e)}"
+
+    def _tag_video_vllm(self, frames, prompt, max_new_tokens, temperature, top_p, top_k, repetition_penalty, presence_penalty, frequency_penalty):
+        try:
+            import base64
+            from io import BytesIO
+
+            content = []
+            for frame in frames:
+                buffered = BytesIO()
+                frame.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode()
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{img_base64}"}
+                })
+            
+            content.append({"type": "text", "text": prompt})
+
+            url = f"{self.vllm_server_url}:{self.vllm_port}/v1/chat/completions"
+            
+            payload = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": max_new_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "repetition_penalty": repetition_penalty,
+                "presence_penalty": presence_penalty,
+                "frequency_penalty": frequency_penalty,
+            }
+
+            response = requests.post(url, json=payload, timeout=120) # Longer timeout for video
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"].strip()
+
+        except Exception as e:
+            return f"Error processing video (vLLM): {str(e)}"
 
     def unload(self):
         """Free VRAM"""

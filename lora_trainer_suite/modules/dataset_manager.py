@@ -11,6 +11,11 @@ from typing import Dict, List, Optional, Tuple
 from PIL import Image
 import random
 from tqdm import tqdm
+try:
+    from ultralytics import YOLO
+    ULTRALYTICS_AVAILABLE = True
+except ImportError:
+    ULTRALYTICS_AVAILABLE = False
 
 
 class DatasetManager:
@@ -396,6 +401,221 @@ class DatasetManager:
         return str(output_path)
 
 
+    def smart_preprocess(
+        self,
+        dataset_path: str,
+        target_size: int = 512,
+        yolo_model: str = "yolov8n.pt",
+        tagger=None,
+        output_dir: Optional[str] = None
+    ) -> Dict[str, List[str]]:
+        """
+        Smart preprocess images using YOLO and VLM fallback
+        
+        Args:
+            dataset_path: Path to dataset
+            target_size: Target image size (square)
+            yolo_model: YOLO model name
+            tagger: QwenVLTagger instance for fallback
+            output_dir: Output directory
+            
+        Returns:
+            Dictionary with lists of 'processed', 'vlm_modified', 'manual_review' images
+        """
+        if not ULTRALYTICS_AVAILABLE:
+            raise ImportError("ultralytics not installed. Please install with: pip install ultralytics")
+
+        if not self.images or str(self.current_dataset) != dataset_path:
+            self.load_dataset(dataset_path)
+
+        if output_dir is None:
+            output_dir = Path(dataset_path) / "smart_cropped"
+        else:
+            output_dir = Path(output_dir)
+            
+        # Create subdirectories
+        (output_dir / "processed").mkdir(parents=True, exist_ok=True)
+        (output_dir / "vlm_modified").mkdir(parents=True, exist_ok=True)
+        (output_dir / "manual_review").mkdir(parents=True, exist_ok=True)
+        (output_dir / "yolo_visualizations").mkdir(parents=True, exist_ok=True)
+
+        preprocessor = SmartPreprocessor(yolo_model)
+        results = {
+            "processed": [],
+            "vlm_modified": [],
+            "manual_review": []
+        }
+
+        print(f"Starting smart preprocessing with {yolo_model}...")
+
+        for img_path in tqdm(self.images, desc="Smart preprocessing"):
+            try:
+                # 1. Try YOLO detection
+                crop_box, yolo_viz = preprocessor.get_yolo_crop(str(img_path), target_size)
+                
+                # Save YOLO visualization (regardless of success)
+                if yolo_viz is not None:
+                    viz_path = output_dir / "yolo_visualizations" / img_path.name
+                    yolo_viz.save(viz_path)
+                
+                category = "processed"
+                final_crop = crop_box
+
+                # 2. Fallback to VLM if YOLO fails (no objects or low confidence)
+                if crop_box is None:
+                    if tagger:
+                        # print(f"YOLO failed for {img_path.name}, trying VLM...")
+                        vlm_crop = tagger.suggest_crop(str(img_path), target_size)
+                        if vlm_crop:
+                            final_crop = (vlm_crop['x'], vlm_crop['y'], vlm_crop['x'] + vlm_crop['w'], vlm_crop['y'] + vlm_crop['h'])
+                            category = "vlm_modified"
+                        else:
+                            category = "manual_review"
+                    else:
+                        category = "manual_review"
+                
+                # 3. Process image
+                with Image.open(img_path) as img:
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                        
+                    if final_crop:
+                        # Ensure crop is within bounds
+                        x1, y1, x2, y2 = final_crop
+                        x1 = max(0, int(x1))
+                        y1 = max(0, int(y1))
+                        x2 = min(img.width, int(x2))
+                        y2 = min(img.height, int(y2))
+                        
+                        # Apply crop
+                        cropped = img.crop((x1, y1, x2, y2))
+                        
+                        # Resize to exact target size
+                        cropped = cropped.resize((target_size, target_size), Image.Resampling.LANCZOS)
+                        
+                        # Save
+                        save_path = output_dir / category / img_path.name
+                        cropped.save(save_path, quality=95)
+                        results[category].append(str(save_path))
+                        
+                        # Copy caption
+                        caption_path = img_path.with_suffix('.txt')
+                        if caption_path.exists():
+                            shutil.copy2(caption_path, output_dir / category / caption_path.name)
+                    else:
+                        # Copy original for manual review
+                        save_path = output_dir / "manual_review" / img_path.name
+                        img.save(save_path)
+                        results["manual_review"].append(str(save_path))
+                        
+                        caption_path = img_path.with_suffix('.txt')
+                        if caption_path.exists():
+                            shutil.copy2(caption_path, output_dir / "manual_review" / caption_path.name)
+
+            except Exception as e:
+                print(f"Error processing {img_path}: {e}")
+                results["manual_review"].append(str(img_path))
+
+        return results
+
+
+class SmartPreprocessor:
+    """Helper class for smart image cropping using YOLO"""
+    
+    def __init__(self, model_name="yolov8n.pt"):
+        self.model = YOLO(model_name)
+        
+    def get_yolo_crop(self, image_path: str, target_size: int) -> Tuple[Optional[Tuple[int, int, int, int]], Optional[Image.Image]]:
+        """
+        Get crop coordinates based on YOLO detections
+        Returns (crop_coords, visualization_image)
+        crop_coords: (x1, y1, x2, y2) or None if no clear subject
+        visualization_image: PIL Image with bounding boxes drawn
+        """
+        try:
+            from PIL import ImageDraw
+            
+            results = self.model(image_path, verbose=False)[0]
+            
+            # Create visualization regardless of detections
+            img = Image.open(image_path)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            viz = img.copy()
+            draw = ImageDraw.Draw(viz)
+            
+            if len(results.boxes) == 0:
+                # Draw text indicating no detections
+                draw.text((10, 10), "No detections", fill=(255, 0, 0))
+                return None, viz
+                
+            # Calculate bounding box of all detections and draw them
+            boxes = results.boxes.xyxy.cpu().numpy()
+            
+            # Draw each individual detection
+            for box in boxes:
+                x1, y1, x2, y2 = box
+                draw.rectangle([(x1, y1), (x2, y2)], outline=(0, 255, 0), width=3)
+            
+            # Calculate union box
+            union_x1 = min(b[0] for b in boxes)
+            union_y1 = min(b[1] for b in boxes)
+            union_x2 = max(b[2] for b in boxes)
+            union_y2 = max(b[3] for b in boxes)
+            
+            # Calculate center of the union box
+            center_x = (union_x1 + union_x2) / 2
+            center_y = (union_y1 + union_y2) / 2
+            
+            # Determine crop size (largest dimension of union box, or target size)
+            # We want a square crop centered on the objects
+            union_w = x2 - x1
+            union_h = y2 - y1
+            crop_size = max(union_w, union_h) * 1.2  # Add some padding
+            
+            # Get image dimensions
+            orig_h, orig_w = results.orig_shape
+            
+            # Determine max possible square size
+            max_size = min(orig_w, orig_h)
+            union_w = union_x2 - union_x1
+            union_h = union_y2 - union_y1
+            crop_size = max(union_w, union_h, target_size * 0.8)  # At least 80% of target
+            
+            # Get image dimensions
+            img_w = img.width
+            img_h = img.height
+            
+            # Calculate crop coordinates (centered on objects)
+            crop_x1 = center_x - crop_size / 2
+            crop_y1 = center_y - crop_size / 2
+            crop_x2 = crop_x1 + crop_size
+            crop_y2 = crop_y1 + crop_size
+            
+            # Ensure crop is within image bounds
+            if crop_x1 < 0:
+                crop_x2 -= crop_x1
+                crop_x1 = 0
+            if crop_y1 < 0:
+                crop_y2 -= crop_y1
+                crop_y1 = 0
+            if crop_x2 > img_w:
+                crop_x1 -= (crop_x2 - img_w)
+                crop_x2 = img_w
+            if crop_y2 > img_h:
+                crop_y1 -= (crop_y2 - img_h)
+                crop_y2 = img_h
+            
+            # Draw final crop box on visualization
+            draw.rectangle([(crop_x1, crop_y1), (crop_x2, crop_y2)], outline=(255, 0, 0), width=5)
+            draw.text((crop_x1 + 10, crop_y1 + 10), "Crop Zone", fill=(255, 0, 0))
+            
+            return (int(crop_x1), int(crop_y1), int(crop_x2), int(crop_y2)), viz
+            
+        except Exception as e:
+            return None
+
+
 # CLI interface for testing
 if __name__ == "__main__":
     import argparse
@@ -407,6 +627,8 @@ if __name__ == "__main__":
     parser.add_argument("--resize", type=int, nargs=2, metavar=('WIDTH', 'HEIGHT'),
                         help="Resize images to WIDTHxHEIGHT")
     parser.add_argument("--metadata", action="store_true", help="Create metadata file")
+    parser.add_argument("--smart-preprocess", action="store_true", help="Run smart preprocessing (YOLO)")
+    parser.add_argument("--target-size", type=int, default=512, help="Target size for smart preprocessing")
 
     args = parser.parse_args()
 
@@ -427,3 +649,6 @@ if __name__ == "__main__":
 
     if args.metadata:
         dm.create_training_metadata(args.dataset)
+
+    if args.smart_preprocess:
+        dm.smart_preprocess(args.dataset, target_size=args.target_size)

@@ -355,14 +355,16 @@ class LoRATrainer:
             for line in process.stdout:
                 self.logs.append(line.strip())
 
-                # Parse loss from output
-                if "loss:" in line.lower() or "loss=" in line.lower():
-                    try:
-                        # Extract loss value (format varies by framework)
-                        loss_val = self._extract_loss(line)
-                        if loss_val is not None:
-                            loss_history.append(loss_val)
-                    except:
+                # Parse metrics from output
+                metrics = self._extract_metrics(line)
+                if metrics:
+                    if 'loss' in metrics:
+                        loss_history.append(metrics['loss'])
+                    if 'lr' in metrics:
+                        # You might want to track LR separately
+                        pass
+                    if 'epoch' in metrics:
+                        # You might want to track Epoch separately
                         pass
 
                 # Check for sample images
@@ -378,11 +380,20 @@ class LoRATrainer:
                         mode='lines',
                         name='Training Loss'
                     ))
+                    
+                    # Add title with latest metrics
+                    title = "Training Loss"
+                    if metrics and 'epoch' in metrics:
+                        title += f" (Epoch {metrics['epoch']})"
+                    if metrics and 'lr' in metrics:
+                        title += f" | LR: {metrics['lr']:.2e}"
+                        
                     fig.update_layout(
-                        title="Training Loss",
+                        title=title,
                         xaxis_title="Step",
                         yaxis_title="Loss",
-                        height=300
+                        height=300,
+                        margin=dict(l=20, r=20, t=40, b=20)
                     )
                     loss_plot = fig
 
@@ -403,23 +414,54 @@ class LoRATrainer:
             self.training_active = False
             self.training_process = None
 
-    def _extract_loss(self, line: str) -> Optional[float]:
-        """Extract loss value from log line"""
+    def _extract_metrics(self, line: str) -> Dict[str, float]:
+        """Extract metrics from log line"""
+        metrics = {}
         import re
 
-        # Try various loss patterns
-        patterns = [
+        # Extract Loss
+        loss_patterns = [
             r"loss[:\s=]+([0-9.]+)",
             r"loss_total[:\s=]+([0-9.]+)",
             r"train_loss[:\s=]+([0-9.]+)",
         ]
-
-        for pattern in patterns:
+        for pattern in loss_patterns:
             match = re.search(pattern, line.lower())
             if match:
-                return float(match.group(1))
+                try:
+                    metrics['loss'] = float(match.group(1))
+                    break
+                except:
+                    pass
 
-        return None
+        # Extract Learning Rate
+        lr_patterns = [
+            r"lr[:\s=]+([0-9.e-]+)",
+            r"learning_rate[:\s=]+([0-9.e-]+)",
+        ]
+        for pattern in lr_patterns:
+            match = re.search(pattern, line.lower())
+            if match:
+                try:
+                    metrics['lr'] = float(match.group(1))
+                    break
+                except:
+                    pass
+
+        # Extract Epoch
+        epoch_patterns = [
+            r"epoch[:\s=]+([0-9.]+)",
+        ]
+        for pattern in epoch_patterns:
+            match = re.search(pattern, line.lower())
+            if match:
+                try:
+                    metrics['epoch'] = float(match.group(1))
+                    break
+                except:
+                    pass
+
+        return metrics
 
     def stop_training(self):
         """Stop active training process"""

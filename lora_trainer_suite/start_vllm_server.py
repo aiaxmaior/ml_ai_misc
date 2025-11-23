@@ -93,8 +93,8 @@ Examples:
   # Default Qwen2.5-VL
   python start_vllm_server.py
 
-  # Qwen3-VL (if available)
-  python start_vllm_server.py --model Qwen/Qwen3-VL-8B
+  # Qwen3-VL (Thinking)
+  python start_vllm_server.py --model Qwen/Qwen3-VL-Thinking
 
   # Abliterated version
   python start_vllm_server.py --model mlabonne/Qwen2-VL-7B-Instruct-abliterated
