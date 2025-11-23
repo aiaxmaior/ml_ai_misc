@@ -20,6 +20,7 @@ from modules.dataset_manager import DatasetManager
 from modules.lora_trainer import LoRATrainer
 from modules.validator import ModelValidator
 from modules.config_manager import ConfigManager
+from modules.video_inference import VideoInferenceModule
 
 
 class LoRATrainerGUI:
@@ -31,10 +32,187 @@ class LoRATrainerGUI:
         self.qwen_tagger = None
         self.lora_trainer = None
         self.validator = None
+        self.video_inference = VideoInferenceModule()
         self.training_thread = None
 
+        # Centralized VLM Settings
+        self.vlm_settings = {
+            "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+            "backend": "auto",
+            "api_url": "http://localhost",
+            "api_port": 8000
+        }
+
+    def _get_qwen_tagger(self):
+        """Get or initialize QwenVLTagger with current settings"""
+        model = self.vlm_settings["model"]
+        backend = self.vlm_settings["backend"]
+        url = self.vlm_settings["api_url"]
+        port = int(self.vlm_settings["api_port"])
+
+        if (self.qwen_tagger is None or 
+            self.qwen_tagger.model_name != model or 
+            self.qwen_tagger.vllm_server_url != url or 
+            self.qwen_tagger.vllm_port != port):
+            
+            if self.qwen_tagger:
+                self.qwen_tagger.unload()
+            
+            self.qwen_tagger = QwenVLTagger(
+                model_name=model,
+                backend=backend,
+                vllm_server_url=url,
+                vllm_port=port
+            )
+        
+        return self.qwen_tagger
+
+    def build_vlm_settings_tab(self):
+        gr.Markdown("## Centralized VLM Settings")
+        gr.Markdown("Configure your Vision Language Model once for all features (Auto Tagging, Smart Crop, Video Inference).")
+        
+        with gr.Row():
+            with gr.Column():
+                vlm_model = gr.Dropdown(
+                    label="VLM Model",
+                    choices=["Qwen/Qwen2.5-VL-7B-Instruct", "Qwen/Qwen3-VL-Thinking"],
+                    value=self.vlm_settings["model"],
+                    allow_custom_value=True
+                )
+                
+                vlm_backend = gr.Radio(
+                    label="Backend",
+                    choices=["auto", "vllm", "direct"],
+                    value=self.vlm_settings["backend"],
+                    info="auto: try vLLM first, fallback to direct"
+                )
+
+            with gr.Column():
+                api_url = gr.Textbox(
+                    label="API URL (vLLM/KoboldCPP)",
+                    value=self.vlm_settings["api_url"]
+                )
+                api_port = gr.Number(
+                    label="API Port",
+                    value=self.vlm_settings["api_port"],
+                    precision=0
+                )
+                refresh_btn = gr.Button("🔄 Query API for Models")
+
+        save_btn = gr.Button("Save VLM Settings", variant="primary")
+        status = gr.Textbox(label="Status", interactive=False)
+
+        def update_settings(model, backend, url, port):
+            self.vlm_settings["model"] = model
+            self.vlm_settings["backend"] = backend
+            self.vlm_settings["api_url"] = url
+            self.vlm_settings["api_port"] = port
+            return f"Settings updated! Model: {model}, Backend: {backend}"
+
+        save_btn.click(
+            fn=update_settings,
+            inputs=[vlm_model, vlm_backend, api_url, api_port],
+            outputs=[status]
+        )
+
+        refresh_btn.click(
+            fn=self.refresh_models,
+            inputs=[api_url, api_port],
+            outputs=[vlm_model]
+        )
+
+    def build_video_inference_tab(self):
+        gr.Markdown("## Video Inference & Tagging")
+        
+        with gr.Row():
+            with gr.Column():
+                video_input = gr.Video(label="Input Video")
+                
+                video_metadata = gr.JSON(label="Video Metadata", visible=False)
+                
+                sample_strategy = gr.Dropdown(
+                    label="Sampling Strategy",
+                    choices=["uniform", "interval", "fps", "all_frames"],
+                    value="uniform",
+                    info="uniform: n frames evenly spaced | interval: every n seconds | fps: resample to specific FPS | all_frames: entire video"
+                )
+                
+                with gr.Row():
+                    num_frames = gr.Number(label="Number of Frames", value=8, precision=0, visible=True)
+                    interval_sec = gr.Number(label="Interval/FPS", value=1.0, visible=False, info="Seconds for 'interval' or target FPS for 'fps'")
+
+                prompt = gr.Textbox(
+                    label="Prompt",
+                    value="Describe this video in detail, focusing on the main action, setting, and atmosphere.",
+                    lines=3
+                )
+                
+                with gr.Accordion("Inference Parameters", open=False):
+                    max_tokens = gr.Number(label="Max New Tokens", value=2000)
+                    temperature = gr.Slider(label="Temperature", minimum=0.1, maximum=2.0, value=0.7)
+                    top_p = gr.Slider(label="Top P", minimum=0.1, maximum=1.0, value=0.9)
+                    repetition_penalty = gr.Slider(label="Repetition Penalty", minimum=1.0, maximum=2.0, value=1.1)
+
+                run_btn = gr.Button("Run Video Inference", variant="primary")
+
+            with gr.Column():
+                output_text = gr.Textbox(label="VLM Response", lines=10, interactive=False)
+                extracted_frames = gr.Gallery(label="Extracted Frames", columns=4)
+
+        def update_sampling_controls(strategy):
+            if strategy == "uniform":
+                return gr.update(visible=True), gr.update(visible=False)
+            elif strategy in ["interval", "fps"]:
+                return gr.update(visible=False), gr.update(visible=True)
+            else:  # all_frames
+                return gr.update(visible=False), gr.update(visible=False)
+
+        def on_video_upload(video_path):
+            if not video_path:
+                return gr.update(visible=False), {}
+            try:
+                metadata = self.video_inference.get_video_info(video_path)
+                return gr.update(visible=True), metadata
+            except:
+                return gr.update(visible=False), {}
+
+        def run_video_inference(video_path, strategy, n_frames, interval, prompt, max_tok, temp, top_p, rep_pen):
+            if not video_path:
+                return "Please upload a video.", []
+            
+            try:
+                frames = self.video_inference.extract_frames(
+                    video_path, strategy, int(n_frames), interval
+                )
+                
+                tagger = self._get_qwen_tagger()
+                response = tagger.tag_video(
+                    frames, prompt, int(max_tok), temp, top_p, 50, rep_pen
+                )
+                return response, frames
+            except Exception as e:
+                return f"Error: {str(e)}", []
+
+        sample_strategy.change(
+            fn=update_sampling_controls,
+            inputs=[sample_strategy],
+            outputs=[num_frames, interval_sec]
+        )
+
+        video_input.change(
+            fn=on_video_upload,
+            inputs=[video_input],
+            outputs=[video_metadata, video_metadata]
+        )
+
+        run_btn.click(
+            fn=run_video_inference,
+            inputs=[video_input, sample_strategy, num_frames, interval_sec, prompt, max_tokens, temperature, top_p, repetition_penalty],
+            outputs=[output_text, extracted_frames]
+        )
+
     def build_interface(self):
-        with gr.Blocks(title="LoRA Trainer Suite", theme=gr.themes.Soft()) as app:
+        with gr.Blocks(title="LoRA Trainer Suite") as app:
             gr.Markdown(
                 """
                 # 🎨 LoRA Trainer Suite
@@ -44,11 +222,17 @@ class LoRATrainerGUI:
             )
 
             with gr.Tabs():
+                with gr.Tab("⚙️ VLM Settings"):
+                    self.build_vlm_settings_tab()
+
                 with gr.Tab("📁 Dataset Preparation"):
                     self.build_dataset_tab()
 
                 with gr.Tab("🏷️ Auto Tagging"):
                     self.build_tagging_tab()
+
+                with gr.Tab("🎥 Video Inference"):
+                    self.build_video_inference_tab()
 
                 with gr.Tab("🚀 LoRA Training"):
                     self.build_training_tab()
@@ -56,7 +240,7 @@ class LoRATrainerGUI:
                 with gr.Tab("✅ Validation"):
                     self.build_validation_tab()
 
-                with gr.Tab("⚙️ Settings"):
+                with gr.Tab("🔧 App Settings"):
                     self.build_settings_tab()
 
         return app
@@ -87,9 +271,16 @@ class LoRATrainerGUI:
 
         with gr.Row():
             with gr.Column():
-                resize_width = gr.Number(label="Resize Width", value=512)
-                resize_height = gr.Number(label="Resize Height", value=512)
-                resize_btn = gr.Button("Batch Resize Images")
+                gr.Markdown("### Smart Preprocessing")
+                target_size = gr.Number(label="Target Size", value=512, info="Square crop size (512 or 1024)")
+                yolo_model = gr.Dropdown(
+                    label="YOLO Model",
+                    choices=["yolov8n.pt", "yolov8s.pt", "yolov8m.pt"],
+                    value="yolov8n.pt"
+                )
+                smart_prep_btn = gr.Button("Start Smart Preprocessing", variant="primary")
+                
+                gr.Markdown("*VLM settings are configured in the 'VLM Settings' tab*")
 
             with gr.Column():
                 augment_flip = gr.Checkbox(label="Horizontal Flip", value=False)
@@ -97,17 +288,28 @@ class LoRATrainerGUI:
                 augment_btn = gr.Button("Apply Augmentation")
 
         process_status = gr.Textbox(label="Status", interactive=False)
+        
+        with gr.Accordion("Review Smart Crops", open=False):
+            with gr.Tabs():
+                with gr.Tab("Processed (YOLO)"):
+                    processed_gallery = gr.Gallery(label="Processed Images", columns=6, height=300)
+                with gr.Tab("VLM Modified"):
+                    vlm_gallery = gr.Gallery(label="VLM Modified (Outliers)", columns=4, height=300)
+                with gr.Tab("Manual Review"):
+                    manual_gallery = gr.Gallery(label="Manual Review Needed", columns=4, height=300)
 
         load_btn.click(
             fn=self.load_dataset,
             inputs=[dataset_path],
             outputs=[dataset_info, image_preview, process_status]
         )
-        resize_btn.click(
-            fn=self.resize_images,
-            inputs=[dataset_path, resize_width, resize_height],
-            outputs=[process_status]
+        
+        smart_prep_btn.click(
+            fn=self.smart_preprocess_dataset,
+            inputs=[dataset_path, target_size, yolo_model],
+            outputs=[process_status, processed_gallery, vlm_gallery, manual_gallery]
         )
+        
         augment_btn.click(
             fn=self.augment_dataset,
             inputs=[dataset_path, augment_flip, augment_rotate],
@@ -134,13 +336,8 @@ class LoRATrainerGUI:
                 )
 
                 use_qwen = gr.Checkbox(label="Qwen VL (Qwen2.5/Qwen3) - Uncensored", value=True)
-
-                qwen_backend = gr.Radio(
-                    label="Qwen Backend",
-                    choices=["auto", "vllm", "direct"],
-                    value="auto",
-                    info="auto: try vLLM first (3-5x faster), fallback to direct | vllm: force vLLM | direct: transformers only"
-                )
+                
+                gr.Markdown("*Configure Qwen Model, Backend, and API in 'VLM Settings' tab*")
 
                 qwen_prompt = gr.Textbox(
                     label="Qwen Custom Prompt",
@@ -233,7 +430,7 @@ class LoRATrainerGUI:
             fn=self.start_auto_tagging,
             inputs=[
                 tag_dataset_path, use_clip, clip_mode,
-                use_qwen, qwen_backend, qwen_prompt,
+                use_qwen, qwen_prompt,
                 temperature, top_p, top_k, repetition_penalty,
                 presence_penalty, frequency_penalty,
                 merge_tags, tag_format
@@ -541,6 +738,32 @@ class LoRATrainerGUI:
         except Exception as e:
             return f"Error: {str(e)}"
 
+    def smart_preprocess_dataset(
+        self, dataset_path: str, target_size: int, yolo_model: str
+    ):
+        try:
+            # Initialize tagger from central settings
+            self.qwen_tagger = self._get_qwen_tagger()
+            
+            results = self.dataset_manager.smart_preprocess(
+                dataset_path=dataset_path,
+                target_size=int(target_size),
+                yolo_model=yolo_model,
+                tagger=self.qwen_tagger
+            )
+            
+            msg = (
+                f"Smart preprocessing complete!\n"
+                f"Processed: {len(results['processed'])}\n"
+                f"VLM Modified: {len(results['vlm_modified'])}\n"
+                f"Manual Review: {len(results['manual_review'])}"
+            )
+            
+            return msg, results['processed'], results['vlm_modified'], results['manual_review']
+            
+        except Exception as e:
+            return f"Error: {str(e)}", [], [], []
+
     def augment_dataset(self, dataset_path: str, flip: bool, rotate: bool) -> str:
         try:
             self.dataset_manager.augment(dataset_path, flip, rotate)
@@ -550,7 +773,7 @@ class LoRATrainerGUI:
 
     def start_auto_tagging(
         self, dataset_path: str, use_clip: bool, clip_mode: str,
-        use_qwen: bool, qwen_backend: str, qwen_prompt: str,
+        use_qwen: bool, qwen_prompt: str,
         temperature: float, top_p: float, top_k: int, repetition_penalty: float,
         presence_penalty: float, frequency_penalty: float,
         merge_tags: bool, tag_format: str
@@ -558,12 +781,15 @@ class LoRATrainerGUI:
         try:
             # load qwen first to check backend
             qwen_using_vllm = False
-            if use_qwen and self.qwen_tagger is None:
-                yield f"Loading Qwen VL (backend: {qwen_backend})...\n", None, ""
-                self.qwen_tagger = QwenVLTagger(backend=qwen_backend)
+            if use_qwen:
+                self.qwen_tagger = self._get_qwen_tagger()
+                yield f"Loading {self.qwen_tagger.model_name} (backend: {self.qwen_tagger.backend})...\n", None, ""
                 qwen_using_vllm = self.qwen_tagger.active_backend == "vllm"
-            elif use_qwen and self.qwen_tagger is not None:
-                qwen_using_vllm = self.qwen_tagger.active_backend == "vllm"
+                
+            if qwen_using_vllm:
+                yield f"Using vLLM backend at {self.qwen_tagger.vllm_server_url}:{self.qwen_tagger.vllm_port}\n", None, ""
+            else:
+                yield "Using direct transformers backend\n", None, ""
 
             # skip CLIP if vLLM is running (VLM is good enough on its own)
             skip_clip = use_clip and qwen_using_vllm
@@ -610,7 +836,22 @@ class LoRATrainerGUI:
             yield f"Tagging complete! Processed {total} images.", None, ""
 
         except Exception as e:
-            yield f"Error: {str(e)}", None, ""
+            yield f"Error: {str(e)}\n", None, ""
+
+    def refresh_models(self, api_url: str, api_port: int):
+        """Query API for available models"""
+        try:
+            import requests
+            url = f"{api_url}:{int(api_port)}/v1/models"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                models = [m['id'] for m in data['data']]
+                return gr.Dropdown(choices=models, value=models[0] if models else None)
+            else:
+                return gr.Dropdown(choices=["Error: API returned " + str(response.status_code)])
+        except Exception as e:
+            return gr.Dropdown(choices=["Error: " + str(e)])
 
     def start_training(self, *args):
         try:
@@ -695,15 +936,68 @@ class LoRATrainerGUI:
         return ", ".join(tags)
 
     def launch(self, **kwargs):
+        # Check VLM directory configuration
+        self._check_vlm_config()
+        
         app = self.build_interface()
-        app.launch(**kwargs)
+        
+        # Add permitted paths
+        allowed_paths = kwargs.pop('allowed_paths', [])
+        allowed_paths.extend([
+            self.config.get("dataset_path", ""),
+            self.config.get("cache_dir", "./models"),
+            os.getcwd()
+        ])
+        
+        # Remove duplicates and empty strings
+        allowed_paths = list(set([p for p in allowed_paths if p]))
+        
+        app.launch(allowed_paths=allowed_paths, **kwargs)
+
+    def _check_vlm_config(self):
+        """Check if VLM directory is configured, prompt if not"""
+        # Check if vLLM is available (mock check for now, or check import)
+        vllm_available = False
+        try:
+            import vllm
+            vllm_available = True
+        except ImportError:
+            pass
+            
+        if not vllm_available:
+            # Check config for VLM directory
+            vlm_dir = self.config.get("vlm_dir")
+            if not vlm_dir:
+                print("\n" + "!"*80)
+                print("vLLM not found or configured!")
+                print("Please enter the directory where your VLM models are stored (or press Enter to skip):")
+                user_input = input("VLM Directory > ").strip()
+                if user_input:
+                    self.config.update({"vlm_dir": user_input})
+                    self.config.save()
+                    print(f"Saved VLM directory: {user_input}")
+                else:
+                    print("Skipping VLM directory configuration.")
+                print("!"*80 + "\n")
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="LoRA Trainer Suite GUI")
+    parser.add_argument("--host", default="0.0.0.0", help="Server host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=7860, help="Server port (default: 7860)")
+    parser.add_argument("--share", action="store_true", help="Create a public share link")
+    parser.add_argument("--no-browser", action="store_true", help="Do not open browser automatically")
+    parser.add_argument("--allowed-paths", nargs="+", default=[], help="Additional allowed paths")
+
+    args = parser.parse_args()
+
     gui = LoRATrainerGUI()
     gui.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=False,
-        inbrowser=True
+        server_name=args.host,
+        server_port=args.port,
+        share=args.share,
+        inbrowser=not args.no_browser,
+        allowed_paths=args.allowed_paths
     )
