@@ -211,11 +211,11 @@ class LoRATrainerGUI:
                     choices=[
                         "black-forest-labs/FLUX.1-dev",
                         "black-forest-labs/FLUX.1-schnell",
-                        "wandai/wan-2.1-14b",
-                        "wandai/wan-2.2-14b",
+                        "Wan-AI/Wan2.1-T2V-14B",
+                        "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
                     ],
                     value="black-forest-labs/FLUX.1-dev",
-                    info="Flux for images, WAN for video generation"
+                    info="Flux for images, WAN (Qwen video) for video generation"
                 )
 
                 output_name = gr.Textbox(
@@ -321,8 +321,8 @@ class LoRATrainerGUI:
                     choices=[
                         "black-forest-labs/FLUX.1-dev",
                         "black-forest-labs/FLUX.1-schnell",
-                        "wandai/wan-2.1-14b",
-                        "wandai/wan-2.2-14b",
+                        "Wan-AI/Wan2.1-T2V-14B",
+                        "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
                     ],
                     value="black-forest-labs/FLUX.1-dev"
                 )
@@ -452,7 +452,7 @@ class LoRATrainerGUI:
                     - CLIP Interrogator for automated captioning
                     - Qwen2-VL / Qwen2.5-VL / Qwen3-VL (uncensored tagging)
                     - **Dual Backend:** vLLM (3-5x faster) + Direct mode
-                    - Support for Flux (images) and WAN 2.1/2.2-14b (video)
+                    - Support for Flux (images) and WAN 2.1/2.2 (Qwen video)
                     - Integrated validation pipeline
 
                     Hardware Requirements:
@@ -470,6 +470,9 @@ class LoRATrainerGUI:
                     **vLLM Server:**
                     Run `python start_vllm_server.py` to start
                     the high-performance inference server.
+
+                    **WAN Video:** Qwen's video diffusion models
+                    (Wan-AI/Wan2.1-T2V-14B, Wan-AI/Wan2.2-T2V-A14B)
                     """
                 )
 

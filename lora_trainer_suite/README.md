@@ -6,10 +6,25 @@ A comprehensive GUI-based LoRA training suite for Flux and Stable Diffusion mode
 
 - 🎨 **Modern Web GUI** - Built with Gradio for easy access
 - 🏷️ **Automated Tagging** - CLIP Interrogator + Qwen2-VL-8B (abliterated)
-- 🚀 **Multi-Model Support** - Flux.1 (images), WAN 2.1/2.2-14b (video)
+- 🚀 **Multi-Model Support** - Flux.1 (images), WAN 2.1/2.2 (Qwen video diffusion)
 - ⚡ **Optimized Performance** - Designed for RTX 3090 with 24GB VRAM
 - 📊 **Real-time Monitoring** - Training progress, loss curves, sample generation
 - ✅ **Built-in Validation** - Quality metrics and comparison tools
+
+## Supported Models
+
+### **Image Generation:**
+- **Flux.1-dev**: High-quality image generation
+- **Flux.1-schnell**: Fast image generation
+
+### **Video Generation (WAN by Qwen):**
+- **Wan2.1-T2V-14B**: Text-to-video generation (14B parameters)
+- **Wan2.2-T2V-A14B**: Advanced text-to-video with MoE architecture (27B total, 14B active)
+
+WAN is Qwen's advanced video diffusion model built on the Diffusion Transformer paradigm with:
+- Novel 3D causal VAE (Wan-VAE) for efficient video compression
+- Flow Matching framework
+- Mixture-of-Experts (MoE) in v2.2 for better quality
 
 ## Hardware Requirements
 
@@ -175,15 +190,19 @@ Mixed Precision: bf16
 Gradient Checkpointing: True
 ```
 
-**WAN Video Diffusion 2.1/2.2-14b:**
+**WAN Video Diffusion (Qwen) 2.1/2.2:**
 ```
+Model: Wan-AI/Wan2.1-T2V-14B or Wan-AI/Wan2.2-T2V-A14B-Diffusers
 Batch Size: 1
 Gradient Accumulation: 4-8
 Learning Rate: 1e-4 to 5e-5
 LoRA Rank: 16-32
 Mixed Precision: bf16
 Resolution: 512x512 (video frames)
+Num Frames: 16-32 (depending on VRAM)
 ```
+
+**Note:** WAN 2.2 uses MoE (Mixture-of-Experts) architecture with 27B total parameters but only 14B active per step.
 
 ### Memory Optimization
 
