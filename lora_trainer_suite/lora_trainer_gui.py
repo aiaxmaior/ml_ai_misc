@@ -2,7 +2,7 @@
 """
 LoRA Trainer GUI Suite
 Main application for training LoRA models with automated tagging and validation
-Supports Flux and Stable Diffusion 2.1/2.2
+Supports Flux (images) and WAN I2V 2.1/2.2 (Qwen video diffusion)
 Optimized for RTX 3090, 128GB RAM, Ryzen 9 7900X
 """
 
@@ -211,11 +211,11 @@ class LoRATrainerGUI:
                     choices=[
                         "black-forest-labs/FLUX.1-dev",
                         "black-forest-labs/FLUX.1-schnell",
-                        "Wan-AI/Wan2.1-T2V-14B",
-                        "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                        "Wan-AI/Wan2.1-I2V-14B-720P",
+                        "Wan-AI/Wan2.2-I2V-A14B",
                     ],
                     value="black-forest-labs/FLUX.1-dev",
-                    info="Flux for images, WAN (Qwen video) for video generation"
+                    info="Flux for images, WAN I2V (Qwen video) to animate images"
                 )
 
                 output_name = gr.Textbox(
@@ -321,8 +321,8 @@ class LoRATrainerGUI:
                     choices=[
                         "black-forest-labs/FLUX.1-dev",
                         "black-forest-labs/FLUX.1-schnell",
-                        "Wan-AI/Wan2.1-T2V-14B",
-                        "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                        "Wan-AI/Wan2.1-I2V-14B-720P",
+                        "Wan-AI/Wan2.2-I2V-A14B",
                     ],
                     value="black-forest-labs/FLUX.1-dev"
                 )
@@ -452,7 +452,7 @@ class LoRATrainerGUI:
                     - CLIP Interrogator for automated captioning
                     - Qwen2-VL / Qwen2.5-VL / Qwen3-VL (uncensored tagging)
                     - **Dual Backend:** vLLM (3-5x faster) + Direct mode
-                    - Support for Flux (images) and WAN 2.1/2.2 (Qwen video)
+                    - Support for Flux (images) and WAN I2V 2.1/2.2 (Qwen video)
                     - Integrated validation pipeline
 
                     Hardware Requirements:
@@ -471,8 +471,9 @@ class LoRATrainerGUI:
                     Run `python start_vllm_server.py` to start
                     the high-performance inference server.
 
-                    **WAN Video:** Qwen's video diffusion models
-                    (Wan-AI/Wan2.1-T2V-14B, Wan-AI/Wan2.2-T2V-A14B)
+                    **WAN I2V:** Qwen's Image-to-Video diffusion models
+                    (Wan-AI/Wan2.1-I2V-14B-720P, Wan-AI/Wan2.2-I2V-A14B)
+                    Workflow: Flux generates image → WAN I2V animates it
                     """
                 )
 
