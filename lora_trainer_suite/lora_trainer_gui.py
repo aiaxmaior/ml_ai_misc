@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
-LoRA Trainer GUI Suite
-Main application for training LoRA models with automated tagging and validation
-Supports Flux (images) and WAN I2V 2.1/2.2 (Qwen video diffusion)
-Optimized for RTX 3090, 128GB RAM, Ryzen 9 7900X
+LoRA training GUI with automated tagging and validation
+Supports Flux and WAN I2V models
 """
 
 import gradio as gr
@@ -14,7 +12,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import threading
 
-# Add modules to path
 sys.path.append(str(Path(__file__).parent))
 
 from modules.clip_interrogator_module import CLIPInterrogatorModule
@@ -26,20 +23,17 @@ from modules.config_manager import ConfigManager
 
 
 class LoRATrainerGUI:
-    """Main GUI application for LoRA training suite"""
 
     def __init__(self):
         self.config = ConfigManager()
         self.dataset_manager = DatasetManager(self.config)
-        self.clip_interrogator = None  # Lazy load
-        self.qwen_tagger = None  # Lazy load
-        self.lora_trainer = None  # Lazy load
-        self.validator = None  # Lazy load
+        self.clip_interrogator = None
+        self.qwen_tagger = None
+        self.lora_trainer = None
+        self.validator = None
         self.training_thread = None
 
     def build_interface(self):
-        """Build the Gradio interface"""
-
         with gr.Blocks(title="LoRA Trainer Suite", theme=gr.themes.Soft()) as app:
             gr.Markdown(
                 """
@@ -49,31 +43,25 @@ class LoRATrainerGUI:
                 """
             )
 
-            with gr.Tabs() as tabs:
-                # Tab 1: Dataset Preparation
+            with gr.Tabs():
                 with gr.Tab("📁 Dataset Preparation"):
                     self.build_dataset_tab()
 
-                # Tab 2: Auto Tagging
                 with gr.Tab("🏷️ Auto Tagging"):
                     self.build_tagging_tab()
 
-                # Tab 3: LoRA Training
                 with gr.Tab("🚀 LoRA Training"):
                     self.build_training_tab()
 
-                # Tab 4: Validation
                 with gr.Tab("✅ Validation"):
                     self.build_validation_tab()
 
-                # Tab 5: Settings
                 with gr.Tab("⚙️ Settings"):
                     self.build_settings_tab()
 
         return app
 
     def build_dataset_tab(self):
-        """Build dataset preparation interface"""
         gr.Markdown("## Dataset Preparation")
 
         with gr.Row():
@@ -110,19 +98,16 @@ class LoRATrainerGUI:
 
         process_status = gr.Textbox(label="Status", interactive=False)
 
-        # Event handlers
         load_btn.click(
             fn=self.load_dataset,
             inputs=[dataset_path],
             outputs=[dataset_info, image_preview, process_status]
         )
-
         resize_btn.click(
             fn=self.resize_images,
             inputs=[dataset_path, resize_width, resize_height],
             outputs=[process_status]
         )
-
         augment_btn.click(
             fn=self.augment_dataset,
             inputs=[dataset_path, augment_flip, augment_rotate],
@@ -130,7 +115,6 @@ class LoRATrainerGUI:
         )
 
     def build_tagging_tab(self):
-        """Build auto-tagging interface"""
         gr.Markdown("## Automated Image Tagging")
 
         with gr.Row():
@@ -245,7 +229,6 @@ class LoRATrainerGUI:
                 current_image = gr.Image(label="Current Image")
                 current_tags = gr.Textbox(label="Generated Tags", lines=5)
 
-        # Event handlers
         start_tag_btn.click(
             fn=self.start_auto_tagging,
             inputs=[
@@ -259,7 +242,6 @@ class LoRATrainerGUI:
         )
 
     def build_training_tab(self):
-        """Build LoRA training interface"""
         gr.Markdown("## LoRA Training Configuration")
 
         with gr.Row():
@@ -366,7 +348,6 @@ class LoRATrainerGUI:
         )
 
     def build_validation_tab(self):
-        """Build validation interface"""
         gr.Markdown("## Model Validation")
 
         with gr.Row():
@@ -440,7 +421,6 @@ class LoRATrainerGUI:
                     """
                 )
 
-        # Event handlers
         generate_btn.click(
             fn=self.validate_model,
             inputs=[
@@ -452,7 +432,6 @@ class LoRATrainerGUI:
         )
 
     def build_settings_tab(self):
-        """Build settings interface"""
         gr.Markdown("## Application Settings")
 
         with gr.Row():
@@ -547,10 +526,7 @@ class LoRATrainerGUI:
             outputs=[settings_status]
         )
 
-    # Implementation methods
-
     def load_dataset(self, dataset_path: str) -> Tuple[Dict, List, str]:
-        """Load and analyze dataset"""
         try:
             info = self.dataset_manager.load_dataset(dataset_path)
             preview_images = self.dataset_manager.get_preview_images(limit=12)
@@ -559,7 +535,6 @@ class LoRATrainerGUI:
             return {}, [], f"Error: {str(e)}"
 
     def resize_images(self, dataset_path: str, width: int, height: int) -> str:
-        """Resize images in dataset"""
         try:
             self.dataset_manager.resize_images(dataset_path, width, height)
             return f"Images resized to {width}x{height}"
@@ -567,7 +542,6 @@ class LoRATrainerGUI:
             return f"Error: {str(e)}"
 
     def augment_dataset(self, dataset_path: str, flip: bool, rotate: bool) -> str:
-        """Apply data augmentation"""
         try:
             self.dataset_manager.augment(dataset_path, flip, rotate)
             return "Augmentation applied successfully"
@@ -581,9 +555,8 @@ class LoRATrainerGUI:
         presence_penalty: float, frequency_penalty: float,
         merge_tags: bool, tag_format: str
     ):
-        """Start automated tagging process"""
         try:
-            # Lazy load Qwen first to check if vLLM is available
+            # load qwen first to check backend
             qwen_using_vllm = False
             if use_qwen and self.qwen_tagger is None:
                 yield f"Loading Qwen VL (backend: {qwen_backend})...\n", None, ""
@@ -592,18 +565,16 @@ class LoRATrainerGUI:
             elif use_qwen and self.qwen_tagger is not None:
                 qwen_using_vllm = self.qwen_tagger.active_backend == "vllm"
 
-            # Smart CLIP loading: skip CLIP if vLLM is active (VLM is robust enough on its own)
+            # skip CLIP if vLLM is running (VLM is good enough on its own)
             skip_clip = use_clip and qwen_using_vllm
             if skip_clip:
                 yield "⚡ vLLM detected! Skipping CLIP Interrogator (using VLM only for faster processing)\n", None, ""
-                use_clip = False  # Disable CLIP for this run
+                use_clip = False
 
-            # Load CLIP only if needed (not using vLLM)
             if use_clip and self.clip_interrogator is None:
                 yield "Loading CLIP Interrogator...", None, ""
                 self.clip_interrogator = CLIPInterrogatorModule()
 
-            # Get all images
             images = self.dataset_manager.get_all_images(dataset_path)
             total = len(images)
 
@@ -612,13 +583,11 @@ class LoRATrainerGUI:
 
                 tags = []
 
-                # CLIP Interrogator
                 if use_clip:
                     clip_tags = self.clip_interrogator.interrogate(img_path, mode=clip_mode)
                     tags.append(clip_tags)
                     progress_text += f"CLIP: {clip_tags}\n"
 
-                # Qwen VL tagging with inference parameters
                 if use_qwen:
                     qwen_tags = self.qwen_tagger.tag_image(
                         img_path,
@@ -633,7 +602,6 @@ class LoRATrainerGUI:
                     tags.append(qwen_tags)
                     progress_text += f"Qwen VL: {qwen_tags}\n"
 
-                # Merge and save tags
                 final_tags = self._merge_tags(tags, tag_format)
                 self.dataset_manager.save_tags(img_path, final_tags, merge_tags)
 
@@ -645,12 +613,10 @@ class LoRATrainerGUI:
             yield f"Error: {str(e)}", None, ""
 
     def start_training(self, *args):
-        """Start LoRA training"""
         try:
             if self.lora_trainer is None:
                 self.lora_trainer = LoRATrainer(self.config)
 
-            # Parse training parameters
             training_config = {
                 'base_model': args[0],
                 'output_name': args[1],
@@ -670,7 +636,6 @@ class LoRATrainerGUI:
                 'sample_prompt': args[15],
             }
 
-            # Start training in generator mode for progress updates
             for progress, loss_data, samples in self.lora_trainer.train(training_config):
                 yield progress, loss_data, samples
 
@@ -682,7 +647,6 @@ class LoRATrainerGUI:
         negative_prompt: str, num_samples: int, steps: int,
         guidance_scale: float, seed: int, num_frames: int, fps: int
     ):
-        """Validate trained LoRA model (images or videos)"""
         try:
             if self.validator is None:
                 self.validator = ModelValidator(self.config)
@@ -707,7 +671,6 @@ class LoRATrainerGUI:
 
     def save_settings(self, device: str, vram_opt: str, cpu_threads: int,
                      qwen_backend: str, vllm_url: str, cache_dir: str) -> str:
-        """Save application settings"""
         try:
             self.config.update({
                 'device': device,
@@ -723,7 +686,6 @@ class LoRATrainerGUI:
             return f"Error: {str(e)}"
 
     def _merge_tags(self, tags: List[str], format: str) -> str:
-        """Merge tags from multiple sources"""
         if format == "comma_separated":
             return ", ".join(tags)
         elif format == "line_separated":
@@ -733,7 +695,6 @@ class LoRATrainerGUI:
         return ", ".join(tags)
 
     def launch(self, **kwargs):
-        """Launch the Gradio interface"""
         app = self.build_interface()
         app.launch(**kwargs)
 
