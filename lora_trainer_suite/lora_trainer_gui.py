@@ -164,6 +164,63 @@ class LoRATrainerGUI:
                     lines=3
                 )
 
+                gr.Markdown("### LLM Inference Parameters")
+                gr.Markdown("*Adjust these to control Qwen VL output quality and prevent repetition*")
+
+                with gr.Row():
+                    temperature = gr.Slider(
+                        label="Temperature",
+                        minimum=0.1,
+                        maximum=2.0,
+                        value=0.7,
+                        step=0.05,
+                        info="Higher = more creative, lower = more focused"
+                    )
+                    top_p = gr.Slider(
+                        label="Top P (Nucleus)",
+                        minimum=0.1,
+                        maximum=1.0,
+                        value=0.9,
+                        step=0.05,
+                        info="Nucleus sampling threshold"
+                    )
+
+                with gr.Row():
+                    top_k = gr.Slider(
+                        label="Top K",
+                        minimum=1,
+                        maximum=100,
+                        value=50,
+                        step=1,
+                        info="Consider top K tokens"
+                    )
+                    repetition_penalty = gr.Slider(
+                        label="Repetition Penalty",
+                        minimum=1.0,
+                        maximum=2.0,
+                        value=1.15,
+                        step=0.05,
+                        info="Penalize repeated tokens (important for Qwen3-VL!)"
+                    )
+
+                with gr.Row():
+                    presence_penalty = gr.Slider(
+                        label="Presence Penalty",
+                        minimum=0.0,
+                        maximum=2.0,
+                        value=0.0,
+                        step=0.1,
+                        info="Penalize tokens that have appeared"
+                    )
+                    frequency_penalty = gr.Slider(
+                        label="Frequency Penalty",
+                        minimum=0.0,
+                        maximum=2.0,
+                        value=0.0,
+                        step=0.1,
+                        info="Penalize based on token frequency"
+                    )
+
                 merge_tags = gr.Checkbox(
                     label="Merge with Existing Tags",
                     value=True
@@ -193,7 +250,10 @@ class LoRATrainerGUI:
             fn=self.start_auto_tagging,
             inputs=[
                 tag_dataset_path, use_clip, clip_mode,
-                use_qwen, qwen_backend, qwen_prompt, merge_tags, tag_format
+                use_qwen, qwen_backend, qwen_prompt,
+                temperature, top_p, top_k, repetition_penalty,
+                presence_penalty, frequency_penalty,
+                merge_tags, tag_format
             ],
             outputs=[tagging_progress, current_image, current_tags]
         )
@@ -516,18 +576,32 @@ class LoRATrainerGUI:
 
     def start_auto_tagging(
         self, dataset_path: str, use_clip: bool, clip_mode: str,
-        use_qwen: bool, qwen_backend: str, qwen_prompt: str, merge_tags: bool, tag_format: str
+        use_qwen: bool, qwen_backend: str, qwen_prompt: str,
+        temperature: float, top_p: float, top_k: int, repetition_penalty: float,
+        presence_penalty: float, frequency_penalty: float,
+        merge_tags: bool, tag_format: str
     ):
         """Start automated tagging process"""
         try:
-            # Lazy load models
-            if use_clip and self.clip_interrogator is None:
-                yield "Loading CLIP Interrogator...", None, ""
-                self.clip_interrogator = CLIPInterrogatorModule()
-
+            # Lazy load Qwen first to check if vLLM is available
+            qwen_using_vllm = False
             if use_qwen and self.qwen_tagger is None:
                 yield f"Loading Qwen VL (backend: {qwen_backend})...\n", None, ""
                 self.qwen_tagger = QwenVLTagger(backend=qwen_backend)
+                qwen_using_vllm = self.qwen_tagger.active_backend == "vllm"
+            elif use_qwen and self.qwen_tagger is not None:
+                qwen_using_vllm = self.qwen_tagger.active_backend == "vllm"
+
+            # Smart CLIP loading: skip CLIP if vLLM is active (VLM is robust enough on its own)
+            skip_clip = use_clip and qwen_using_vllm
+            if skip_clip:
+                yield "⚡ vLLM detected! Skipping CLIP Interrogator (using VLM only for faster processing)\n", None, ""
+                use_clip = False  # Disable CLIP for this run
+
+            # Load CLIP only if needed (not using vLLM)
+            if use_clip and self.clip_interrogator is None:
+                yield "Loading CLIP Interrogator...", None, ""
+                self.clip_interrogator = CLIPInterrogatorModule()
 
             # Get all images
             images = self.dataset_manager.get_all_images(dataset_path)
@@ -544,11 +618,20 @@ class LoRATrainerGUI:
                     tags.append(clip_tags)
                     progress_text += f"CLIP: {clip_tags}\n"
 
-                # Qwen2-VL tagging
+                # Qwen VL tagging with inference parameters
                 if use_qwen:
-                    qwen_tags = self.qwen_tagger.tag_image(img_path, qwen_prompt)
+                    qwen_tags = self.qwen_tagger.tag_image(
+                        img_path,
+                        prompt=qwen_prompt,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=int(top_k),
+                        repetition_penalty=repetition_penalty,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty
+                    )
                     tags.append(qwen_tags)
-                    progress_text += f"Qwen: {qwen_tags}\n"
+                    progress_text += f"Qwen VL: {qwen_tags}\n"
 
                 # Merge and save tags
                 final_tags = self._merge_tags(tags, tag_format)
