@@ -186,6 +186,10 @@ class QwenVLTagger:
         max_new_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.9,
+        top_k: int = 50,
+        repetition_penalty: float = 1.1,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
         do_sample: bool = True
     ) -> str:
         """
@@ -195,8 +199,12 @@ class QwenVLTagger:
             image: Path to image or PIL Image
             prompt: Custom prompt (if None, uses default tagging prompt)
             max_new_tokens: Maximum tokens to generate
-            temperature: Sampling temperature
-            top_p: Nucleus sampling parameter
+            temperature: Sampling temperature (0.0-2.0)
+            top_p: Nucleus sampling parameter (0.0-1.0)
+            top_k: Top-k sampling parameter (1-100)
+            repetition_penalty: Penalty for repeating tokens (1.0-2.0, 1.0=no penalty)
+            presence_penalty: Penalty for using already-used tokens (0.0-2.0)
+            frequency_penalty: Penalty based on token frequency (0.0-2.0)
             do_sample: Whether to use sampling
 
         Returns:
@@ -204,11 +212,13 @@ class QwenVLTagger:
         """
         if self.active_backend == "vllm":
             return self._tag_image_vllm(
-                image, prompt, max_new_tokens, temperature, top_p, do_sample
+                image, prompt, max_new_tokens, temperature, top_p, top_k,
+                repetition_penalty, presence_penalty, frequency_penalty, do_sample
             )
         else:
             return self._tag_image_direct(
-                image, prompt, max_new_tokens, temperature, top_p, do_sample
+                image, prompt, max_new_tokens, temperature, top_p, top_k,
+                repetition_penalty, presence_penalty, frequency_penalty, do_sample
             )
 
     def _tag_image_direct(
@@ -218,6 +228,10 @@ class QwenVLTagger:
         max_new_tokens: int,
         temperature: float,
         top_p: float,
+        top_k: int,
+        repetition_penalty: float,
+        presence_penalty: float,
+        frequency_penalty: float,
         do_sample: bool
     ) -> str:
         """Generate tags using direct Transformers backend"""
@@ -281,6 +295,8 @@ class QwenVLTagger:
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
                     do_sample=do_sample,
                     pad_token_id=self.processor.tokenizer.pad_token_id,
                     eos_token_id=self.processor.tokenizer.eos_token_id,
@@ -311,6 +327,10 @@ class QwenVLTagger:
         max_new_tokens: int,
         temperature: float,
         top_p: float,
+        top_k: int,
+        repetition_penalty: float,
+        presence_penalty: float,
+        frequency_penalty: float,
         do_sample: bool
     ) -> str:
         """Generate tags using vLLM backend"""
@@ -368,6 +388,10 @@ class QwenVLTagger:
                 "max_tokens": max_new_tokens,
                 "temperature": temperature,
                 "top_p": top_p,
+                "top_k": top_k,
+                "repetition_penalty": repetition_penalty,
+                "presence_penalty": presence_penalty,
+                "frequency_penalty": frequency_penalty,
             }
 
             # Send request to vLLM
